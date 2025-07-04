@@ -18,6 +18,7 @@ require (
 )
 
 require (
+	github.com/gorilla/mux v1.8.1
 	github.com/hashicorp/raft v1.7.3
 	go.uber.org/multierr v1.10.0 // indirect
 )
