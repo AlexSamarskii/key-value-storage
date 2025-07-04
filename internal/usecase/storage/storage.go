@@ -55,6 +55,17 @@ func (s *Storage) Set(key, value string, ttl time.Duration) {
 	}
 }
 
+func (s *Storage) HSet(hash, key, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.hset[hash]; !ok {
+		s.hset[hash] = map[string]string{}
+	}
+
+	s.hset[hash][key] = value
+}
+
 func (s *Storage) Get(key string) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -64,6 +75,14 @@ func (s *Storage) Get(key string) (string, bool) {
 	}
 
 	value, found := s.data[key]
+	return value, found
+}
+
+func (s *Storage) HGet(hash, key string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	value, found := s.hset[hash][key]
 	return value, found
 }
 
@@ -77,5 +96,29 @@ func (s *Storage) Delete(key string) error {
 	}
 
 	delete(s.data, key)
+	return nil
+}
+func (s *Storage) HDelete(hash, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, found := s.hset[hash][key]
+	if !found {
+		return errors.New("key not found")
+	}
+
+	delete(s.hset[hash], key)
+	return nil
+}
+func (s *Storage) HDeleteAll(hash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, found := s.hset[hash]
+	if !found {
+		return errors.New("key not found")
+	}
+
+	delete(s.hset, hash)
 	return nil
 }
