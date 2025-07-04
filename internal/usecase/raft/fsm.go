@@ -2,10 +2,11 @@ package raft
 
 import (
 	"encoding/json"
-	command "keyvalue/internal/pkg"
+	//command "keyvalue/internal/pkg"
 	"keyvalue/internal/usecase/storage"
 
 	"github.com/hashicorp/raft"
+	"github.com/visualfc/gotools/pkg/command"
 	"go.uber.org/zap"
 )
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"keyvalue/internal/usecase/aof"
+	commands "keyvalue/internal/usecase/commands"
 	"keyvalue/internal/usecase/resp"
 	"keyvalue/internal/usecase/storage"
 	"log"
