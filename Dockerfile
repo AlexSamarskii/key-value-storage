@@ -7,8 +7,7 @@ RUN apk add --no-cache git
 WORKDIR /app
 
 # Copy go.mod and go.sum
-COPY go.mod ./
-COPY go.sum ./
+COPY go.mod go.sum ./
 
 # Download dependencies
 RUN go mod download
@@ -16,7 +15,7 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the applications
+# Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o keyvalue-server ./cmd/server
 
 # Use a smaller image for the final build
@@ -31,16 +30,17 @@ RUN adduser -D -g '' keyvalue
 # Create necessary directories
 RUN mkdir -p /data && chown -R keyvalue:keyvalue /data
 
-# Copy the binaries from the builder stage
-COPY --from=builder /app/keyvalue-server /usr/local/bin/
+# Copy the binary from the builder stage
+COPY --from=builder --chown=keyvalue /app/keyvalue-server /usr/local/bin/
 
-# Set working directory
-WORKDIR /cmd
+# Set working directory (fixed path)
+WORKDIR /app
 
 # Use the non-root user
 USER keyvalue
 
-# Expose the HTTP and Raft ports
+# Expose the ports
 EXPOSE 8080 7000 6379
 
-CMD [". /keyvalue"]
+# Fixed CMD command
+CMD ["keyvalue-server"]
