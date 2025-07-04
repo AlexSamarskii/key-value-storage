@@ -1,0 +1,3 @@
+port: 6379
+aof_enabled: true
+aof_file: "database.aof"
