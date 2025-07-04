@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"sync"
 	"time"
 )
@@ -42,12 +43,39 @@ func (s *Storage) startExpirationCheck() {
 	}
 }
 
-func (s *Storage) Set(key, value string, ttl time.Duration) {}
+func (s *Storage) Set(key, value string, ttl time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.data[key] = value
+	if ttl > 0 {
+		s.expiration[key] = time.Now().Add(ttl)
+	} else {
+		delete(s.expiration, key)
+	}
+}
 
 func (s *Storage) Get(key string) (string, bool) {
-	return "", false
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if expTime, exists := s.expiration[key]; exists && time.Now().After(expTime) {
+		return "", false
+	}
+
+	value, found := s.data[key]
+	return value, found
 }
 
 func (s *Storage) Delete(key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, found := s.data[key]
+	if !found {
+		return errors.New("key not found")
+	}
+
+	delete(s.data, key)
 	return nil
 }
