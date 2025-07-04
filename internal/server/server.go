@@ -13,8 +13,12 @@ import (
 	"strings"
 )
 
+type config struct {
+	port int
+}
+
 type Server struct {
-	port    int
+	config  config
 	listner net.Listener
 	storage *storage.Storage
 	logger  *log.Logger
@@ -23,14 +27,14 @@ type Server struct {
 
 func NewServer(port int) *Server {
 	return &Server{
-		port:    port,
+		config:  config{port: port},
 		storage: storage.NewStorage(),
 		logger:  log.New(os.Stdout, "[INFO]: ", log.Ldate|log.Ltime|log.Lshortfile),
 	}
 }
 
 func (s *Server) Start() {
-	listner, err := net.Listen("tcp", fmt.Sprintf(":%d", s.port))
+	listner, err := net.Listen("tcp", fmt.Sprintf(":%d", s.config.port))
 	if err != nil {
 		s.logger.Fatalf("Failed to start the server: %v\n", err)
 	}
@@ -52,10 +56,11 @@ func (s *Server) Start() {
 
 	s.serve()
 
-	s.logger.Printf("Server started on port: %v\n", s.port)
+	s.logger.Printf("Server started on port: %v\n", s.config.port)
 }
 
 func (s *Server) serve() {
+
 	for {
 		conn, err := s.listner.Accept()
 		if err != nil {
