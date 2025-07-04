@@ -9,6 +9,8 @@ import (
 	"go.uber.org/zap"
 )
 
+// TODO
+
 type FSM struct {
 	store  storage.MemoryStorage
 	logger *zap.Logger
