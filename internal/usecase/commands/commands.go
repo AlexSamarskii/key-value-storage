@@ -8,38 +8,70 @@ import (
 	"time"
 )
 
-func ExecuteCommand(cmd resp.Value, store *storage.Storage) resp.Value {
+type CommandExecutor struct {
+	store     *storage.Storage
+	commands  map[string]CommandHandler
+	startTime time.Time
+}
+
+type CommandHandler func(args []resp.Value) resp.Value
+
+func NewCommandExecutor(store *storage.Storage) *CommandExecutor {
+	executor := &CommandExecutor{
+		store:     store,
+		startTime: time.Now(),
+	}
+
+	executor.commands = map[string]CommandHandler{
+		"PING":    executor.ping,
+		"GET":     executor.get,
+		"SET":     executor.set,
+		"DEL":     executor.del,
+		"HSET":    executor.hset,
+		"HGET":    executor.hget,
+		"HDEL":    executor.hdel,
+		"INFO":    executor.info,
+		"EXPIRE":  executor.expire,
+		"TTL":     executor.ttl,
+		"COMMAND": executor.command,
+	}
+
+	return executor
+}
+
+func (e *CommandExecutor) Execute(cmd resp.Value) resp.Value {
+	if cmd.Typ != "array" || len(cmd.Array) == 0 {
+		return resp.Value{Typ: "error", Str: "Invalid command format"}
+	}
+
 	command := strings.ToUpper(cmd.Array[0].Bulk)
 	args := cmd.Array[1:]
 
-	switch command {
-	case "PING":
-		return ping(args)
-	case "GET":
-		return get(args, store)
-	case "SET":
-		return set(args, store)
-	case "DEL":
-		return del(args, store)
-	default:
-		return resp.Value{Typ: "error", Str: "Unknown Command"}
+	if handler, exists := e.commands[command]; exists {
+		return handler(args)
 	}
+
+	return resp.Value{Typ: "error", Str: "Unknown command '" + command + "'"}
 }
 
-func ping(args []resp.Value) resp.Value {
+func (e *CommandExecutor) RegisterCommand(name string, handler CommandHandler) {
+	e.commands[strings.ToUpper(name)] = handler
+}
+
+// ping обработчик команды PING
+func (e *CommandExecutor) ping(args []resp.Value) resp.Value {
 	if len(args) == 0 {
 		return resp.Value{Typ: "string", Str: "PONG"}
 	}
-
 	return resp.Value{Typ: "string", Str: args[0].Bulk}
 }
 
-func get(args []resp.Value, store *storage.Storage) resp.Value {
+func (e *CommandExecutor) get(args []resp.Value) resp.Value {
 	if len(args) != 1 {
-		return resp.Value{Typ: "error", Str: "Usage: GET [key]"}
+		return resp.Value{Typ: "error", Str: "ERR wrong number of arguments for 'GET' command"}
 	}
 
-	value, found := store.Get(args[0].Bulk)
+	value, found := e.store.Get(args[0].Bulk)
 	if !found {
 		return resp.Value{Typ: "null"}
 	}
@@ -47,36 +79,211 @@ func get(args []resp.Value, store *storage.Storage) resp.Value {
 	return resp.Value{Typ: "bulk", Bulk: value}
 }
 
-func set(args []resp.Value, store *storage.Storage) resp.Value {
-	if len(args) < 2 || len(args) > 3 {
-		return resp.Value{Typ: "error", Str: "Usage: SET [key] [value] [TTL]"}
+func (e *CommandExecutor) set(args []resp.Value) resp.Value {
+	if len(args) < 2 {
+		return resp.Value{Typ: "error", Str: "ERR wrong number of arguments for 'SET' command"}
 	}
 
 	key := args[0].Bulk
 	value := args[1].Bulk
 	var ttl time.Duration
-	if len(args) == 3 {
-		ttlSeconds, err := strconv.Atoi(args[2].Bulk)
-		if err != nil {
-			return resp.Value{Typ: "error", Str: "Invalid TTL value"}
-		}
 
-		ttl = time.Duration(ttlSeconds) * time.Second
+	// опции (NX, XX, EX, PX)
+	if len(args) > 2 {
+		for i := 2; i < len(args); i++ {
+			arg := strings.ToUpper(args[i].Bulk)
+			switch arg {
+			case "NX":
+				if _, exists := e.store.Get(key); exists {
+					return resp.Value{Typ: "null"}
+				}
+			case "XX":
+				if _, exists := e.store.Get(key); !exists {
+					return resp.Value{Typ: "null"}
+				}
+			case "EX":
+				if i+1 >= len(args) {
+					return resp.Value{Typ: "error", Str: "ERR syntax error"}
+				}
+				seconds, err := strconv.Atoi(args[i+1].Bulk)
+				if err != nil {
+					return resp.Value{Typ: "error", Str: "ERR invalid expire time"}
+				}
+				ttl = time.Duration(seconds) * time.Second
+				i++
+			case "PX":
+				if i+1 >= len(args) {
+					return resp.Value{Typ: "error", Str: "ERR syntax error"}
+				}
+				millis, err := strconv.Atoi(args[i+1].Bulk)
+				if err != nil {
+					return resp.Value{Typ: "error", Str: "ERR invalid expire time"}
+				}
+				ttl = time.Duration(millis) * time.Millisecond
+				i++
+			}
+		}
 	}
 
-	store.Set(key, value, ttl)
+	e.store.Set(key, value, ttl)
 	return resp.Value{Typ: "string", Str: "OK"}
 }
 
-func del(args []resp.Value, store *storage.Storage) resp.Value {
-	if len(args) != 1 {
-		return resp.Value{Typ: "error", Str: "Usage: DEL [key]"}
+func (e *CommandExecutor) del(args []resp.Value) resp.Value {
+	if len(args) < 1 {
+		return resp.Value{Typ: "error", Str: "ERR wrong number of arguments for 'DEL' command"}
 	}
 
-	err := store.Delete(args[0].Bulk)
+	deleted := 0
+	for _, arg := range args {
+		if err := e.store.Delete(arg.Bulk); err == nil {
+			deleted++
+		}
+	}
+
+	return resp.Value{Typ: "integer", Num: deleted}
+}
+
+func (e *CommandExecutor) hset(args []resp.Value) resp.Value {
+	if len(args) < 3 || len(args)%2 != 1 {
+		return resp.Value{Typ: "error", Str: "ERR wrong number of arguments for 'HSET' command"}
+	}
+
+	hash := args[0].Bulk
+	fields := 0
+	var ttl time.Duration = 0
+
+	// Проверяем, есть ли TTL (последний аргумент должен быть числом)
+	if len(args) >= 4 {
+		if ttlSec, err := strconv.Atoi(args[len(args)-1].Bulk); err == nil {
+			ttl = time.Duration(ttlSec) * time.Second
+			args = args[:len(args)-1] // удаляем TTL из аргументов
+		}
+	}
+
+	for i := 1; i < len(args); i += 2 {
+		if i+1 >= len(args) {
+			return resp.Value{Typ: "error", Str: "ERR wrong number of arguments for field-value pairs"}
+		}
+		field := args[i].Bulk
+		value := args[i+1].Bulk
+		e.store.HSet(hash, field, value, ttl)
+		fields++
+	}
+
+	return resp.Value{Typ: "integer", Num: fields}
+}
+
+func (e *CommandExecutor) hget(args []resp.Value) resp.Value {
+	if len(args) != 2 {
+		return resp.Value{Typ: "error", Str: "ERR wrong number of arguments for 'HGET' command"}
+	}
+
+	value, found := e.store.HGet(args[0].Bulk, args[1].Bulk)
+	if !found {
+		return resp.Value{Typ: "null"}
+	}
+
+	return resp.Value{Typ: "bulk", Bulk: value}
+}
+
+func (e *CommandExecutor) hdel(args []resp.Value) resp.Value {
+	if len(args) < 2 {
+		return resp.Value{Typ: "error", Str: "ERR wrong number of arguments for 'HDEL' command"}
+	}
+
+	hash := args[0].Bulk
+	deleted := 0
+
+	for i := 1; i < len(args); i++ {
+		if err := e.store.HDelete(hash, args[i].Bulk); err == nil {
+			deleted++
+		}
+	}
+
+	return resp.Value{Typ: "integer", Num: deleted}
+}
+
+func (e *CommandExecutor) expire(args []resp.Value) resp.Value {
+	if len(args) != 2 {
+		return resp.Value{Typ: "error", Str: "ERR wrong number of arguments for 'EXPIRE' command"}
+	}
+
+	seconds, err := strconv.Atoi(args[1].Bulk)
 	if err != nil {
-		return resp.Value{Typ: "error", Str: err.Error()}
+		return resp.Value{Typ: "error", Str: "ERR invalid expire time"}
 	}
 
-	return resp.Value{Typ: "string", Str: "OK"}
+	key := args[0].Bulk
+	if _, exists := e.store.Get(key); !exists {
+		return resp.Value{Typ: "integer", Num: 0}
+	}
+
+	e.store.Set(key, "", time.Duration(seconds)*time.Second)
+	return resp.Value{Typ: "integer", Num: 1}
+}
+
+func (e *CommandExecutor) ttl(args []resp.Value) resp.Value {
+	if len(args) != 1 {
+		return resp.Value{Typ: "error", Str: "ERR wrong number of arguments for 'TTL' command"}
+	}
+
+	key := args[0].Bulk
+	_, found := e.store.Get(key)
+	if !found {
+		return resp.Value{Typ: "integer", Num: -2}
+	}
+
+	// В реальной реализации здесь нужно получить TTL из хранилища
+	// Здесь -1 (нет TTL)
+	return resp.Value{Typ: "integer", Num: -1}
+}
+
+func (e *CommandExecutor) info(args []resp.Value) resp.Value {
+	uptime := time.Since(e.startTime).Round(time.Second)
+	info := map[string]string{
+		"server":      "keyvalue",
+		"version":     "1.0.0",
+		"uptime":      uptime.String(),
+		"uptime_secs": strconv.Itoa(int(uptime.Seconds())),
+	}
+
+	var sections []string
+	if len(args) > 0 {
+		sections = strings.Split(strings.ToLower(args[0].Bulk), ",")
+	}
+
+	var result strings.Builder
+	for section, value := range info {
+		if len(sections) == 0 || contains(sections, section) {
+			result.WriteString(section)
+			result.WriteString(":")
+			result.WriteString(value)
+			result.WriteString("\r\n")
+		}
+	}
+
+	return resp.Value{Typ: "bulk", Bulk: result.String()}
+}
+
+func (e *CommandExecutor) command(args []resp.Value) resp.Value {
+	commands := []string{"PING", "GET", "SET", "DEL", "HSET", "HGET", "HDEL", "INFO", "EXPIRE", "TTL"}
+	return resp.Value{Typ: "array", Array: toRespArray(commands)}
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+func toRespArray(items []string) []resp.Value {
+	result := make([]resp.Value, len(items))
+	for i, item := range items {
+		result[i] = resp.Value{Typ: "bulk", Bulk: item}
+	}
+	return result
 }

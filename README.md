@@ -15,3 +15,14 @@
 - **Поддержка TTL**:
   - `EXPIRE`, `TTL` команды
   - Автоматическое удаление просроченных ключей
+
+```bash
+git clone https://github.com/yourusername/keyvalue-server.git
+cd keyvalue-server
+go build -o kv-server cmd/server/main.go
+```
+
+```Docker
+docker build -t keyvalue-server .
+docker run -d -p 6379:6379 -v ./data:/data --name kv-server keyvalue-server
+```

@@ -51,7 +51,7 @@ func (s *Server) Start() {
 	s.aof = aof
 
 	s.aof.Read(func(value resp.Value) {
-		commands.ExecuteCommand(value, s.storage)
+		commands.Execute(value, s.storage)
 	})
 
 	s.serve()
