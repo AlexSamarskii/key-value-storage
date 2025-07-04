@@ -2,8 +2,8 @@ package aof
 
 import (
 	"bufio"
-	"encoding/json"
 	"io"
+	"keyvalue/internal/usecase/resp"
 	"os"
 	"sync"
 	"time"
@@ -37,12 +37,11 @@ func NewAof(path string) (*Aof, error) {
 	return aof, nil
 }
 
-func (aof *Aof) Write(value string) error {
+func (aof *Aof) Write(value resp.Value) error {
 	aof.mu.Lock()
 	defer aof.mu.Unlock()
 
-	val, _ := json.Marshal(value)
-	_, err := aof.file.Write(val)
+	_, err := aof.file.Write(value.Marshal())
 	if err != nil {
 		return err
 	}
@@ -50,7 +49,7 @@ func (aof *Aof) Write(value string) error {
 	return nil
 }
 
-func (aof *Aof) Read(callback func(value string)) error {
+func (aof *Aof) Read(callback func(value resp.Value)) error {
 	aof.mu.Lock()
 	defer aof.mu.Unlock()
 
