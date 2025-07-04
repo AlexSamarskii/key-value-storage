@@ -21,6 +21,12 @@ type MemoryStorage struct {
 	mx   sync.RWMutex
 }
 
+func NewMemoryStorage() *MemoryStorage {
+	return &MemoryStorage{
+		data: make(map[string]Value),
+	}
+}
+
 func (m *MemoryStorage) Get(key string) (Value, error) {
 	m.mx.RLock()
 	defer m.mx.RUnlock()
