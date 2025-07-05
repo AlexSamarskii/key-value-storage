@@ -4,112 +4,185 @@ import (
 	"fmt"
 	"io"
 	"keyvalue/internal/usecase/aof"
-	commands "keyvalue/internal/usecase/commands"
+	command "keyvalue/internal/usecase/commands"
 	"keyvalue/internal/usecase/resp"
 	"keyvalue/internal/usecase/storage"
 	"log"
 	"net"
 	"os"
 	"strings"
+	"sync"
 )
 
-type config struct {
-	port int
+type Config struct {
+	Port        int
+	AofFilename string
 }
 
 type Server struct {
-	config  config
-	listner net.Listener
-	storage *storage.Storage
-	logger  *log.Logger
-	aof     *aof.Aof
+	config      Config
+	listener    net.Listener
+	storage     *storage.Storage
+	commandExec *command.CommandExecutor
+	logger      *log.Logger
+	aof         *aof.Aof
+	shutdown    chan struct{}
+	wg          sync.WaitGroup
 }
 
-func NewServer(port int) *Server {
+func NewServer(cfg Config) *Server {
+	stor := storage.NewStorage()
 	return &Server{
-		config:  config{port: port},
-		storage: storage.NewStorage(),
-		logger:  log.New(os.Stdout, "[INFO]: ", log.Ldate|log.Ltime|log.Lshortfile),
+		config:      cfg,
+		storage:     stor,
+		commandExec: command.NewCommandExecutor(stor),
+		logger:      log.New(os.Stdout, "[kv-server] ", log.Ldate|log.Ltime|log.Lshortfile),
+		shutdown:    make(chan struct{}),
 	}
 }
 
-func (s *Server) Start() {
-	listner, err := net.Listen("tcp", fmt.Sprintf(":%d", s.config.port))
+func (s *Server) Start() error {
+	var err error
+	s.listener, err = net.Listen("tcp", fmt.Sprintf(":%d", s.config.Port))
 	if err != nil {
-		s.logger.Fatalf("Failed to start the server: %v\n", err)
+		return fmt.Errorf("failed to start server: %w", err)
 	}
 
-	aof, err := aof.NewAof("database.aof")
+	s.aof, err = aof.NewAof(s.config.AofFilename)
 	if err != nil {
-		s.logger.Fatalf("Failed to create AOF: %v\n", err)
+		return fmt.Errorf("failed to create AOF: %w", err)
 	}
 
-	defer listner.Close()
-	defer aof.Close()
+	// Восстановление состояния из AOF
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.aof.Read(func(value resp.Value) {
+			s.commandExec.Execute(value)
+		})
+	}()
 
-	s.listner = listner
-	s.aof = aof
+	s.logger.Printf("Server started on port %d", s.config.Port)
+	s.wg.Add(1)
+	go s.serve()
 
-	s.aof.Read(func(value resp.Value) {
-		commands.Execute(value, s.storage)
-	})
+	return nil
+}
 
-	s.serve()
-
-	s.logger.Printf("Server started on port: %v\n", s.config.port)
+func (s *Server) Stop() {
+	close(s.shutdown)
+	if s.listener != nil {
+		s.listener.Close()
+	}
+	if s.aof != nil {
+		s.aof.Close()
+	}
+	s.wg.Wait()
+	s.logger.Println("Server stopped gracefully")
 }
 
 func (s *Server) serve() {
+	defer s.wg.Done()
 
 	for {
-		conn, err := s.listner.Accept()
-		if err != nil {
-			s.logger.Printf("Failed to accept connection: %v\n", err)
-			continue
+		select {
+		case <-s.shutdown:
+			return
+		default:
+			conn, err := s.listener.Accept()
+			if err != nil {
+				if !strings.Contains(err.Error(), "use of closed network connection") {
+					s.logger.Printf("Failed to accept connection: %v", err)
+				}
+				continue
+			}
+
+			s.wg.Add(1)
+			go func() {
+				defer s.wg.Done()
+				s.handleConnection(conn)
+			}()
 		}
-
-		go s.handleConnection(conn)
-
 	}
 }
 
 func (s *Server) handleConnection(conn net.Conn) {
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			s.logger.Printf("Error closing connection: %v", err)
+		}
+	}()
+
+	remoteAddr := conn.RemoteAddr().String()
+	s.logger.Printf("New connection from %s", remoteAddr)
+
 	reader := resp.NewReader(conn)
 	writer := resp.NewWriter(conn)
 
 	for {
-		cmd, err := reader.Read()
-		if err != nil {
-			if err == io.EOF {
-				s.logger.Printf("Client disconnected: %v\n", conn.RemoteAddr())
+		select {
+		case <-s.shutdown:
+			return
+		default:
+			cmd, err := reader.Read()
+			if err != nil {
+				if err == io.EOF {
+					s.logger.Printf("Client %s disconnected", remoteAddr)
+					return
+				}
+				s.logger.Printf("Error reading from %s: %v", remoteAddr, err)
 				return
 			}
 
-			s.logger.Printf("Error reading command: %v\n", err)
-			return
-		}
+			if cmd.Typ != "array" || len(cmd.Array) == 0 {
+				s.logger.Printf("Invalid command format from %s", remoteAddr)
+				writer.Write(resp.Value{Typ: "error", Str: "ERR invalid command format"})
+				continue
+			}
 
-		if cmd.Typ != "array" {
-			s.logger.Println("Invalid request, expected array")
-			continue
-		}
+			// Логируем команду
+			cmdStr := commandToString(cmd)
+			s.logger.Printf("Command from %s: %s", remoteAddr, cmdStr)
 
-		if len(cmd.Array) == 0 {
-			s.logger.Println("Invalid request, expected array length > 0")
-			continue
-		}
+			// Обработка команды
+			result := s.processCommand(cmd)
 
-		command := strings.ToUpper(cmd.Array[0].Bulk)
-		if command == "SET" || command == "HSET" || command == "DEL" || command == "HDEL" || command == "HDELALL" {
-			err := s.aof.Write(cmd)
-			if err != nil {
-				s.logger.Printf("Failed to write to the aof: %v\n", err)
+			// Отправка результата
+			if err := writer.Write(result); err != nil {
+				s.logger.Printf("Failed to write response to %s: %v", remoteAddr, err)
+				return
 			}
 		}
-
-		result := commands.ExecuteCommand(cmd, s.storage)
-
-		writer.Write(result)
 	}
+}
+
+func (s *Server) processCommand(cmd resp.Value) resp.Value {
+	command := strings.ToUpper(cmd.Array[0].Bulk)
+
+	// Записываем в AOF только модифицирующие команды
+	if isWriteCommand(command) {
+		if err := s.aof.Write(cmd); err != nil {
+			s.logger.Printf("AOF write error: %v", err)
+			return resp.Value{Typ: "error", Str: "ERR internal error"}
+		}
+	}
+
+	return s.commandExec.Execute(cmd)
+}
+
+func isWriteCommand(cmd string) bool {
+	switch cmd {
+	case "SET", "HSET", "DEL", "HDEL", "HDELALL", "EXPIRE":
+		return true
+	default:
+		return false
+	}
+}
+
+func commandToString(cmd resp.Value) string {
+	var parts []string
+	for _, arg := range cmd.Array {
+		parts = append(parts, arg.Bulk)
+	}
+	return strings.Join(parts, " ")
 }
