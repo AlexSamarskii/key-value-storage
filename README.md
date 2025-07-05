@@ -26,3 +26,7 @@ go build -o kv-server cmd/server/main.go
 docker build -t keyvalue-server .
 docker run -d -p 6379:6379 -v ./data:/data --name kv-server keyvalue-server
 ```
+
+## TODO
+
+  - **Unit тесты**
