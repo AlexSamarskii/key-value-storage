@@ -51,12 +51,9 @@ func NewAof(path string) (*Aof, error) {
 func (a *Aof) syncLoop() {
 	defer a.wg.Done()
 
-	ticker := time.NewTicker(SyncInterval)
-	defer ticker.Stop()
-
 	for {
 		select {
-		case <-ticker.C:
+		case <-time.After(SyncInterval):
 			a.Flush()
 		case <-a.stopChan:
 			a.Flush() // Последняя синхронизация перед выходом
@@ -182,16 +179,21 @@ func (a *Aof) reopenFile() error {
 
 func (a *Aof) Close() error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 
 	if a.closed {
+		a.mu.Unlock()
 		return nil
 	}
+
+	a.closed = true
+	a.mu.Unlock()
 
 	close(a.stopChan)
 	a.wg.Wait()
 
-	a.closed = true
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if err := a.writer.Flush(); err != nil {
 		return err
 	}

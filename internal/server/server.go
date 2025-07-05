@@ -28,6 +28,7 @@ type Server struct {
 	aof         *aof.Aof
 	shutdown    chan struct{}
 	wg          sync.WaitGroup
+	conns       sync.Map
 }
 
 func NewServer(cfg Config) *Server {
@@ -53,14 +54,11 @@ func (s *Server) Start() error {
 		return fmt.Errorf("failed to create AOF: %w", err)
 	}
 
-	// Восстановление состояния из AOF
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		s.aof.Read(func(value resp.Value) {
-			s.commandExec.Execute(value)
-		})
-	}()
+	if err := s.aof.Read(func(value resp.Value) {
+		s.commandExec.Execute(value)
+	}); err != nil {
+		return fmt.Errorf("failed to read AOF: %w", err)
+	}
 
 	s.logger.Printf("Server started on port %d", s.config.Port)
 	s.wg.Add(1)
@@ -71,12 +69,21 @@ func (s *Server) Start() error {
 
 func (s *Server) Stop() {
 	close(s.shutdown)
+	s.logger.Println("Server1")
 	if s.listener != nil {
 		s.listener.Close()
 	}
+	s.logger.Println("Server2")
+	s.conns.Range(func(key any, _ any) bool {
+		conn := key.(net.Conn)
+		conn.Close()
+		return true
+	})
+	s.logger.Println("Server3")
 	if s.aof != nil {
 		s.aof.Close()
 	}
+	s.logger.Println("Server4")
 	s.wg.Wait()
 	s.logger.Println("Server stopped gracefully")
 }
@@ -94,7 +101,13 @@ func (s *Server) serve() {
 				if !strings.Contains(err.Error(), "use of closed network connection") {
 					s.logger.Printf("Failed to accept connection: %v", err)
 				}
-				continue
+				select {
+				case <-s.shutdown:
+					return
+				default:
+					s.logger.Printf("Accept error: %v", err)
+					continue
+				}
 			}
 
 			s.wg.Add(1)
@@ -111,6 +124,12 @@ func (s *Server) handleConnection(conn net.Conn) {
 		if err := conn.Close(); err != nil {
 			s.logger.Printf("Error closing connection: %v", err)
 		}
+	}()
+
+	s.conns.Store(conn, struct{}{})
+	defer func() {
+		conn.Close()
+		s.conns.Delete(conn)
 	}()
 
 	remoteAddr := conn.RemoteAddr().String()
@@ -140,14 +159,12 @@ func (s *Server) handleConnection(conn net.Conn) {
 				continue
 			}
 
-			// Логируем команду
 			cmdStr := commandToString(cmd)
 			s.logger.Printf("Command from %s: %s", remoteAddr, cmdStr)
 
 			// Обработка команды
 			result := s.processCommand(cmd)
 
-			// Отправка результата
 			if err := writer.Write(result); err != nil {
 				s.logger.Printf("Failed to write response to %s: %v", remoteAddr, err)
 				return
