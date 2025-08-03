@@ -69,21 +69,17 @@ func (s *Server) Start() error {
 
 func (s *Server) Stop() {
 	close(s.shutdown)
-	s.logger.Println("Server1")
 	if s.listener != nil {
 		s.listener.Close()
 	}
-	s.logger.Println("Server2")
 	s.conns.Range(func(key any, _ any) bool {
 		conn := key.(net.Conn)
 		conn.Close()
 		return true
 	})
-	s.logger.Println("Server3")
 	if s.aof != nil {
 		s.aof.Close()
 	}
-	s.logger.Println("Server4")
 	s.wg.Wait()
 	s.logger.Println("Server stopped gracefully")
 }
@@ -94,6 +90,7 @@ func (s *Server) serve() {
 	for {
 		select {
 		case <-s.shutdown:
+			s.logger.Printf("Shutdown")
 			return
 		default:
 			conn, err := s.listener.Accept()
