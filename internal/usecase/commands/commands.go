@@ -29,7 +29,10 @@ func NewCommandExecutor(store *storage.Storage) *CommandExecutor {
 		"DEL":     executor.del,
 		"HSET":    executor.hset,
 		"HGET":    executor.hget,
+		"HGETALL": executor.hgetall,
+		"HEXISTS": executor.hexists,
 		"HDEL":    executor.hdel,
+		"FLUSHDB": executor.flushdb,
 		"INFO":    executor.info,
 		"EXPIRE":  executor.expire,
 		"TTL":     executor.ttl,
@@ -204,6 +207,61 @@ func (e *CommandExecutor) hdel(args []resp.Value) resp.Value {
 	return resp.Value{Typ: "integer", Num: deleted}
 }
 
+func (e *CommandExecutor) hgetall(args []resp.Value) resp.Value {
+	if len(args) != 1 {
+		return resp.Value{Typ: "error", Str: "ERR wrong number of arguments for 'HGETALL' command"}
+	}
+
+	collection := args[0].Bulk
+	fields := e.store.HGetAll(collection)
+
+	if fields == nil {
+		// Коллекции нет → пустой массив
+		return resp.Value{Typ: "array", Array: []resp.Value{}}
+	}
+
+	var result []resp.Value
+	for field, value := range fields {
+		result = append(result, resp.Value{Typ: "bulk", Bulk: field})
+		result = append(result, resp.Value{Typ: "bulk", Bulk: value})
+	}
+
+	return resp.Value{Typ: "array", Array: result}
+}
+
+func (e *CommandExecutor) hexists(args []resp.Value) resp.Value {
+	if len(args) != 2 {
+		return resp.Value{Typ: "error", Str: "ERR wrong number of arguments for 'HEXISTS' command"}
+	}
+
+	collection := args[0].Bulk
+	field := args[1].Bulk
+
+	if e.store.HExists(collection, field) {
+		return resp.Value{Typ: "integer", Num: 1}
+	}
+
+	return resp.Value{Typ: "integer", Num: 0}
+}
+
+func (e *CommandExecutor) flushdb(args []resp.Value) resp.Value {
+	if len(args) > 0 {
+		return resp.Value{Typ: "error", Str: "ERR wrong number of arguments for 'FLUSHDB' command"}
+	}
+
+	e.store.FlushDB()
+	return resp.Value{Typ: "string", Str: "OK"}
+}
+
+func (e *CommandExecutor) hlen(args []resp.Value) resp.Value {
+	if len(args) != 1 {
+		return resp.Value{Typ: "error", Str: "ERR wrong number of arguments for 'HLEN' command"}
+	}
+
+	collection := args[0].Bulk
+	return resp.Value{Typ: "integer", Num: e.store.HLen(collection)}
+}
+
 func (e *CommandExecutor) expire(args []resp.Value) resp.Value {
 	if len(args) != 2 {
 		return resp.Value{Typ: "error", Str: "ERR wrong number of arguments for 'EXPIRE' command"}
@@ -231,14 +289,22 @@ func (e *CommandExecutor) ttl(args []resp.Value) resp.Value {
 	}
 
 	key := args[0].Bulk
+
 	_, found := e.store.Get(key)
 	if !found {
 		return resp.Value{Typ: "integer", Num: -2}
 	}
 
-	// В реальной реализации здесь нужно получить TTL из хранилища
-	// Здесь -1 (нет TTL)
-	return resp.Value{Typ: "integer", Num: -1}
+	remaining, err := e.store.TTL(key)
+	if err != nil {
+		if err.Error() == "key has no TTL" {
+			return resp.Value{Typ: "integer", Num: -1} // нет TTL
+		}
+		// Если ключ просрочен, но ещё не удалён
+		return resp.Value{Typ: "integer", Num: -2}
+	}
+
+	return resp.Value{Typ: "integer", Num: int(remaining.Seconds())}
 }
 
 func (e *CommandExecutor) info(args []resp.Value) resp.Value {
@@ -269,7 +335,9 @@ func (e *CommandExecutor) info(args []resp.Value) resp.Value {
 }
 
 func (e *CommandExecutor) command(args []resp.Value) resp.Value {
-	commands := []string{"PING", "GET", "SET", "DEL", "HSET", "HGET", "HDEL", "INFO", "EXPIRE", "TTL"}
+	commands := []string{"PING", "GET", "SET", "DEL",
+		"HSET", "HGET", "HGETALL", "HEXISTS", "HDEL",
+		"FLUSHDB", "INFO", "EXPIRE", "TTL", "COMMAND"}
 	return resp.Value{Typ: "array", Array: toRespArray(commands)}
 }
 

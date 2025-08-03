@@ -200,6 +200,88 @@ func (s *Storage) HDeleteAll(collection string) error {
 	return nil
 }
 
+func (s *Storage) HGetAll(collection string) map[string]string {
+	s.mu.RLock()
+	coll, exists := s.hCollections[collection]
+	s.mu.RUnlock()
+
+	if !exists {
+		return nil
+	}
+
+	coll.mu.RLock()
+	defer coll.mu.RUnlock()
+
+	now := time.Now()
+	result := make(map[string]string)
+
+	for field, value := range coll.fields {
+		if expTime, hasTTL := coll.expiration[field]; hasTTL && now.After(expTime) {
+			continue
+		}
+		result[field] = value
+	}
+
+	return result
+}
+
+func (s *Storage) HExists(collection, field string) bool {
+	s.mu.RLock()
+	coll, exists := s.hCollections[collection]
+	s.mu.RUnlock()
+
+	if !exists {
+		return false
+	}
+
+	coll.mu.RLock()
+	defer coll.mu.RUnlock()
+
+	_, found := coll.fields[field]
+	if !found {
+		return false
+	}
+
+	if expTime, hasTTL := coll.expiration[field]; hasTTL && time.Now().After(expTime) {
+		return false
+	}
+
+	return true
+}
+
+func (s *Storage) HLen(collection string) int {
+	s.mu.RLock()
+	coll, exists := s.hCollections[collection]
+	s.mu.RUnlock()
+
+	if !exists {
+		return 0
+	}
+
+	coll.mu.RLock()
+	defer coll.mu.RUnlock()
+
+	now := time.Now()
+	count := 0
+	for field := range coll.fields {
+		if expTime, hasTTL := coll.expiration[field]; hasTTL && now.After(expTime) {
+			continue
+		}
+		count++
+	}
+
+	return count
+}
+
+func (s *Storage) FlushDB() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.data = make(map[string]string)
+	s.expiration = make(map[string]time.Time)
+	s.hCollections = make(map[string]*NestedCollection)
+}
+
 // Exists проверяет существование ключа
 func (s *Storage) Exists(key string) bool {
 	s.mu.RLock()
