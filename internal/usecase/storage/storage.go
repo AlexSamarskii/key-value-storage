@@ -15,6 +15,7 @@ type Storage struct {
 }
 
 type NestedCollection struct {
+	mu         sync.RWMutex
 	fields     map[string]string
 	expiration map[string]time.Time
 }
@@ -135,6 +136,8 @@ func (s *Storage) HCollection(name string) *NestedCollection {
 // HSet устанавливает значение в вложенной коллекции
 func (s *Storage) HSet(collection, field string, value string, ttl time.Duration) {
 	coll := s.HCollection(collection)
+	coll.mu.Lock()
+	defer coll.mu.Unlock()
 
 	coll.fields[field] = value
 	if ttl > 0 {
@@ -147,12 +150,15 @@ func (s *Storage) HSet(collection, field string, value string, ttl time.Duration
 // HGet получает значение из вложенной коллекции
 func (s *Storage) HGet(collection, field string) (string, bool) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	coll, exists := s.hCollections[collection]
+	s.mu.RUnlock()
+
 	if !exists {
 		return "", false
 	}
+
+	coll.mu.RLock()
+	defer coll.mu.RUnlock()
 
 	if expTime, exists := coll.expiration[field]; exists && time.Now().After(expTime) {
 		return "", false
