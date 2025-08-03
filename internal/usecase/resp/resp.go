@@ -75,7 +75,7 @@ func (r *Reader) readInteger() (Value, error) {
 	if err != nil {
 		return Value{}, err
 	}
-	num, err := strconv.Atoi(str) // Рекурсивный вызов — поддержка вложенных структур
+	num, err := strconv.Atoi(str)
 	if err != nil {
 		return Value{}, fmt.Errorf("cannot parse integer: %s", str)
 	}

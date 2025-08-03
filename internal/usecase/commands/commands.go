@@ -215,11 +215,13 @@ func (e *CommandExecutor) expire(args []resp.Value) resp.Value {
 	}
 
 	key := args[0].Bulk
-	if _, exists := e.store.Get(key); !exists {
+	ttl := time.Duration(seconds) * time.Second
+
+	err = e.store.SetTTL(key, ttl)
+	if err != nil {
 		return resp.Value{Typ: "integer", Num: 0}
 	}
 
-	e.store.Set(key, "", time.Duration(seconds)*time.Second)
 	return resp.Value{Typ: "integer", Num: 1}
 }
 

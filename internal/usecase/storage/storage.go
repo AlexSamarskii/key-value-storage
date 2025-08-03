@@ -230,3 +230,22 @@ func (s *Storage) TTL(key string) (time.Duration, error) {
 
 	return remaining, nil
 }
+
+func (s *Storage) SetTTL(key string, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, found := s.data[key]
+	if !found {
+		return errors.New("key not found")
+	}
+
+	if ttl > 0 {
+		s.expiration[key] = time.Now().Add(ttl)
+	} else {
+		// Если ttl == 0 или < 0, удаляем TTL (бессрочный ключ)
+		delete(s.expiration, key)
+	}
+
+	return nil
+}
