@@ -37,6 +37,8 @@ func NewCommandExecutor(store *storage.Storage) *CommandExecutor {
 		"EXPIRE":  executor.expire,
 		"TTL":     executor.ttl,
 		"COMMAND": executor.command,
+		"PERSIST": executor.persist,
+		"HLEN":    executor.hlen,
 	}
 
 	return executor
@@ -145,6 +147,21 @@ func (e *CommandExecutor) del(args []resp.Value) resp.Value {
 	}
 
 	return resp.Value{Typ: "integer", Num: deleted}
+}
+
+func (e *CommandExecutor) persist(args []resp.Value) resp.Value {
+	if len(args) != 1 {
+		return resp.Value{Typ: "error", Str: "ERR wrong number of arguments for 'PERSIST' command"}
+	}
+
+	key := args[0].Bulk
+
+	err := e.store.SetTTL(key, 0)
+	if err != nil {
+		return resp.Value{Typ: "integer", Num: 0} // ключ не найден
+	}
+
+	return resp.Value{Typ: "integer", Num: 1}
 }
 
 func (e *CommandExecutor) hset(args []resp.Value) resp.Value {
@@ -337,7 +354,7 @@ func (e *CommandExecutor) info(args []resp.Value) resp.Value {
 func (e *CommandExecutor) command(args []resp.Value) resp.Value {
 	commands := []string{"PING", "GET", "SET", "DEL",
 		"HSET", "HGET", "HGETALL", "HEXISTS", "HDEL",
-		"FLUSHDB", "INFO", "EXPIRE", "TTL", "COMMAND"}
+		"FLUSHDB", "INFO", "EXPIRE", "TTL", "COMMAND", "PERSIST", "HLEN"}
 	return resp.Value{Typ: "array", Array: toRespArray(commands)}
 }
 
