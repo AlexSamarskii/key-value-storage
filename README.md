@@ -43,7 +43,7 @@ go build -o ../../key-value-storage
 
 ```Docker
 docker build -t keyvalue-server .
-docker run -d -p 6379:6379 -v ./data:/data --name kv-server keyvalue-server
+docker run -d --name kv-server -p 6379:6379 -v ./data:/data keyvalue-server
 ```
 
 ### 2. Подключение через redis-cli

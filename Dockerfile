@@ -1,46 +1,51 @@
+# === Сборка ===
 FROM golang:1.24-alpine AS builder
 
-# Install build dependencies
-RUN apk add --no-cache git
+# Установка зависимостей для сборки
+RUN apk add --no-cache git make ca-certificates
 
-# Set working directory
+# Рабочая директория
 WORKDIR /app
 
-# Copy go.mod and go.sum
+# Копируем go.mod и go.sum для кэширования зависимостей
 COPY go.mod go.sum ./
-
-# Download dependencies
 RUN go mod download
 
-# Copy source code
+# Копируем исходный код
 COPY . .
 
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o keyvalue-server ./cmd/server
+# Собираем статически скомпилированный бинарник
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -a \
+    -installsuffix cgo \
+    -o /go/bin/keyvalue-server \
+    ./cmd/server
 
-# Use a smaller image for the final build
+# === Финальный образ ===
 FROM alpine:latest
 
-# Install CA certificates for HTTPS
-RUN apk --no-cache add ca-certificates
+# Установка необходимых пакетов и создание пользователя
+RUN apk --no-cache add ca-certificates && \
+    adduser -D -u 1000 -g 1000 keyvalue && \
+    mkdir -p /data /app && \
+    chown -R keyvalue:keyvalue /data /app
 
-# Create a non-root user to run the application
-RUN adduser -D -g '' keyvalue
+# Копируем бинарник с правами пользователя
+COPY --from=builder --chown=keyvalue:keyvalue /go/bin/keyvalue-server /usr/local/bin/keyvalue-server
 
-# Create necessary directories
-RUN mkdir -p /data && chown -R keyvalue:keyvalue /data
-
-# Copy the binary from the builder stage
-COPY --from=builder --chown=keyvalue /app/keyvalue-server /usr/local/bin/
-
-# Set working directory (fixed path)
+# Устанавливаем рабочую директорию
 WORKDIR /app
 
-# Use the non-root user
+# Пользователь без прав root
 USER keyvalue
 
-# Expose the ports
-EXPOSE 8080 7000 6379
+# Переменные окружения
+ENV PORT=6379
+ENV AOF_FILENAME=/data/database.aof
 
-# Fixed CMD command
-CMD ["keyvalue-server"]
+# Экспорт порта Redis
+EXPOSE 6379
+
+# Точка входа и команда по умолчанию
+ENTRYPOINT ["/usr/local/bin/keyvalue-server"]
+CMD []
